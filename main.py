@@ -25,6 +25,9 @@ if not APP_URL:
     logging.error("APP_URL не встановлено")
     raise ValueError("Помилка: APP_URL не встановлено")
 
+# Додаємо https:// до APP_URL, якщо відсутнє
+if not APP_URL.startswith("https://"):
+    APP_URL = f"https://{APP_URL}"
 logging.info(f"APP_URL: {APP_URL}, PORT: {PORT}")
 
 # Ініціалізація бота

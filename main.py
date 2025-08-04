@@ -3,7 +3,7 @@ import telebot
 from openai import OpenAI
 from flask import Flask, request
 import logging
-import sqlite3
+import psycopg2
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 # Налаштування логування
@@ -14,6 +14,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 APP_URL = os.getenv("APP_URL")
 PORT = os.getenv("PORT", "5000")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not BOT_TOKEN:
     logging.error("BOT_TOKEN не встановлено")
@@ -24,6 +25,9 @@ if not OPENAI_API_KEY:
 if not APP_URL:
     logging.error("APP_URL не встановлено")
     raise ValueError("Помилка: APP_URL не встановлено")
+if not DATABASE_URL:
+    logging.error("DATABASE_URL не встановлено")
+    raise ValueError("Помилка: DATABASE_URL не встановлено")
 
 # Додаємо https:// до APP_URL, якщо відсутнє
 if not APP_URL.startswith("https://"):
@@ -54,30 +58,30 @@ except FileNotFoundError:
     )
     logging.warning("instructions.txt не знайдено, використовується стандартна підказка")
 
-# Ініціалізація SQLite
+# Ініціалізація PostgreSQL
 def init_db():
-    conn = sqlite3.connect("users.db")
+    conn = psycopg2.connect(DATABASE_URL)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
+            user_id BIGINT PRIMARY KEY,
             username TEXT,
             phone_number TEXT
         )
     """)
     conn.commit()
     conn.close()
-    logging.info("База даних users.db ініціалізована")
+    logging.info("База даних PostgreSQL ініціалізована")
 
 init_db()
 
 # Збереження контактів у базу
 def save_contact(user_id, username, phone_number):
-    conn = sqlite3.connect("users.db")
+    conn = psycopg2.connect(DATABASE_URL)
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT OR REPLACE INTO users (user_id, username, phone_number) VALUES (?, ?, ?)",
-        (user_id, username, phone_number)
+        "INSERT INTO users (user_id, username, phone_number) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET username = %s, phone_number = %s",
+        (user_id, username, phone_number, username, phone_number)
     )
     conn.commit()
     conn.close()
@@ -174,6 +178,30 @@ def index():
     except Exception as e:
         logging.error(f"Помилка налаштування Webhook: {e}")
         return "Webhook setup failed", 500
+
+# Обробник для перевірки контактів
+@bot.message_handler(commands=['get_contacts'])
+def get_contacts(message):
+    ADMIN_ID = ТВІЙ_ADMIN_ID  # Заміни на свій Telegram user_id
+    if message.from_user.id == ADMIN_ID:
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users")
+            contacts = cursor.fetchall()
+            conn.close()
+            if contacts:
+                response = "Збережені контакти:\n" + "\n".join([f"ID: {c[0]}, Username: {c[1]}, Phone: {c[2]}" for c in contacts])
+            else:
+                response = "Контактів поки немає."
+            bot.reply_to(message, response)
+            logging.info(f"Надіслано список контактів для admin_id={message.from_user.id}")
+        except Exception as e:
+            bot.reply_to(message, f"Помилка при отриманні контактів: {str(e)}")
+            logging.error(f"Помилка при отриманні контактів: {e}")
+    else:
+        bot.reply_to(message, "Ця команда тільки для адміна!")
+        logging.info(f"Невірна спроба доступу до /get_contacts від user_id={message.from_user.id}")
 
 # Запуск сервера (для локального тестування, Railway використовує gunicorn)
 if __name__ == '__main__':

@@ -164,6 +164,6 @@ if __name__ == "__main__":
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CallbackQueryHandler(button_callback))
 
-    # Запуск бота з allowed_updates для уникнення конфліктів
+    # Запуск бота з drop_pending_updates для очищення застарілих оновлень
     logger.info("Бот запущено")
-    application.run_polling(allowed_updates=None)
+    application.run_polling(drop_pending_updates=True)

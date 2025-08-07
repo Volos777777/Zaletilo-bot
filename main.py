@@ -1,211 +1,164 @@
 import os
-import telebot
-from openai import OpenAI
-from flask import Flask, request
+import signal
 import logging
-import psycopg2
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.error import TelegramError
+from broadcast import broadcast  # Імпорт broadcast з окремого файлу
+from database import init_db, load_users, save_user, update_subscription_status, update_blocked_status  # Імпорт з database.py
 
 # Налаштування логування
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Перевірка змінних середовища
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-APP_URL = os.getenv("APP_URL")
-PORT = os.getenv("PORT", "5000")
+# Змінні середовища
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHANNEL_ID = "-1002823366291"
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-if not BOT_TOKEN:
-    logging.error("BOT_TOKEN не встановлено")
-    raise ValueError("Помилка: BOT_TOKEN не встановлено")
-if not OPENAI_API_KEY:
-    logging.error("OPENAI_API_KEY не встановлено")
-    raise ValueError("Помилка: OPENAI_API_KEY не встановлено")
-if not APP_URL:
-    logging.error("APP_URL не встановлено")
-    raise ValueError("Помилка: APP_URL не встановлено")
-if not DATABASE_URL:
-    logging.error("DATABASE_URL не встановлено")
-    raise ValueError("Помилка: DATABASE_URL не встановлено")
-
-# Додаємо https:// до APP_URL, якщо відсутнє
-if not APP_URL.startswith("https://"):
-    APP_URL = f"https://{APP_URL}"
-logging.info(f"APP_URL: {APP_URL}, PORT: {PORT}")
-
-# Ініціалізація бота
-bot = telebot.TeleBot(BOT_TOKEN)
-
-# Ініціалізація OpenAI
-client = OpenAI(api_key=OPENAI_API_KEY)
-
-# Ініціалізація Flask
-app = Flask(__name__)
-
-# Зчитування інструкцій із файлу
-try:
-    with open("instructions.txt", "r", encoding="utf-8") as file:
-        system_prompt = file.read()
-    logging.info("Інструкції успішно завантажено з instructions.txt")
-except FileNotFoundError:
-    system_prompt = (
-        "Ти ШІ-консультант для креаторів контенту, який відповідає українською. "
-        "Спілкуйся дружньо, як досвідчений друг, який допомагає з маркетингом, створенням контенту для YouTube, Instagram, TikTok та монетизацією. "
-        "Використовуй покрокові інструкції, приклади та легкий гумор. "
-        "Якщо користувач питає, хто ти, нагадуй, що ти ШІ. "
-        "Якщо запит не стосується тем креаторів, ввічливо перенаправ до релевантних питань."
-    )
-    logging.warning("instructions.txt не знайдено, використовується стандартна підказка")
-
-# Ініціалізація PostgreSQL
-def init_db():
-    conn = psycopg2.connect(DATABASE_URL)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
-            username TEXT,
-            phone_number TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
-    logging.info("База даних PostgreSQL ініціалізована")
-
-init_db()
-
-# Збереження контактів у базу
-def save_contact(user_id, username, phone_number):
-    conn = psycopg2.connect(DATABASE_URL)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO users (user_id, username, phone_number) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET username = %s, phone_number = %s",
-        (user_id, username, phone_number, username, phone_number)
-    )
-    conn.commit()
-    conn.close()
-    logging.info(f"Збережено контакт: user_id={user_id}, username={username}, phone_number={phone_number}")
-
-# Історія чатів
-chat_history = {}
-
-# Обробник Webhook
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def webhook():
-    try:
-        update = telebot.types.Update.de_json(request.get_json())
-        bot.process_new_updates([update])
-        logging.info("Отримано та оброблено Webhook-запит")
-        return "OK", 200
-    except Exception as e:
-        logging.error(f"Помилка обробки Webhook: {e}")
-        return "Error", 500
-
 # Обробник команди /start
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    keyboard = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    button = KeyboardButton("Поділитися контактом", request_contact=True)
-    keyboard.add(button)
-    bot.reply_to(
-        message,
-        "Привіт! Я ШІ-консультант для креаторів, твій помічник із YouTube, Instagram і TikTok. 😎 "
-        "Ми збережемо твій номер для персоналізованих консультацій. Твої дані в безпеці! Поділися контактом!",
-        reply_markup=keyboard
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    save_user(
+        user.id,
+        username=user.username,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        language_code=user.language_code
     )
-    logging.info(f"Надіслано /start для user_id={message.from_user.id}")
-
-# Обробник контактів
-@bot.message_handler(content_types=['contact'])
-def handle_contact(message):
-    user_id = message.from_user.id
-    username = message.from_user.username
-    phone_number = message.contact.phone_number
-
-    save_contact(user_id, username, phone_number)
-    
-    bot.reply_to(
-        message,
-        f"Дякую, {message.from_user.first_name}! Твій номер збережено. 😊 "
-        "Тепер можеш питати про створення контенту, маркетинг чи монетизацію!"
+    keyboard = [
+        [InlineKeyboardButton("Підписався (лась)", callback_data="subscribe")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        f"Привіт, {user.first_name}! Ласкаво просимо до бота @zaletilo_bot!\n"
+        f"Приєднуйтесь до нашого каналу: {CHANNEL_ID}",
+        reply_markup=reply_markup
     )
-    bot.reply_to(message, "Клавіатура прибрана.", reply_markup=telebot.types.ReplyKeyboardRemove())
-    logging.info(f"Оброблено контакт для user_id={user_id}")
 
-# Обробник текстових повідомлень
-@bot.message_handler(content_types=['text'])
-def handle_message(message):
-    user_id = message.from_user.id
-    user_message = message.text
+# Обробник колбека для кнопки підписки та регіонів
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
 
-    if user_id not in chat_history:
-        chat_history[user_id] = [{"role": "system", "content": system_prompt}]
-
-    chat_history[user_id].append({"role": "user", "content": user_message})
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=chat_history[user_id],
-            max_tokens=150
+    if query.data == "subscribe":
+        update_subscription_status(user_id, True)
+        # Створюємо клавіатуру з регіонами
+        keyboard = [
+            [
+                InlineKeyboardButton("Київ", url="https://t.me/+MAtbwy9ufGAwMzli"),
+                InlineKeyboardButton("Дніпро", url="https://t.me/+YvX-FzQHpU1kNGZi"),
+                InlineKeyboardButton("Харків", url="https://t.me/+kanHOVAz99FlODYy"),
+                InlineKeyboardButton("Одеса", url="https://t.me/+FyKju8C82b43OGEy"),
+                InlineKeyboardButton("Львів", url="https://t.me/+rbesn-FqWKkxMDFi")
+            ],
+            [
+                InlineKeyboardButton("Інші регіони", callback_data="other_regions")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "Дякуємо за підписку! Тепер ви можете знаходити замовлення та створювати оголошення у вашому регіоні. Оберіть свій регіон:",
+            reply_markup=reply_markup
+        )
+    elif query.data == "other_regions":
+        # Клавіатура з рештою регіонів
+        keyboard = [
+            [
+                InlineKeyboardButton("Запоріжжя", url="https://t.me/+XE-XiYnCSOwwYzAy"),
+                InlineKeyboardButton("Вінниця", url="https://t.me/+TsEar0CH3z0wYzQy"),
+                InlineKeyboardButton("Полтава", url="https://t.me/+cQcCFMOlQ6dkMWQy")
+            ],
+            [
+                InlineKeyboardButton("Чернігів", url="https://t.me/+KPOzzkb_B4RhNjU6"),
+                InlineKeyboardButton("Черкаси", url="https://t.me/+6d_cW6rKyrU0MDE6"),
+                InlineKeyboardButton("Хмельницький", url="https://t.me/+2ZktT_xJXd81NTJi")
+            ],
+            [
+                InlineKeyboardButton("Житомир", url="https://t.me/+-X78W7iXLkMzZTgy"),
+                InlineKeyboardButton("Суми", url="https://t.me/+f0P0ATKrmB5lYTli"),
+                InlineKeyboardButton("Рівне", url="https://t.me/+FaswQkcAfw5jNTli")
+            ],
+            [
+                InlineKeyboardButton("Івано-Франківськ", url="https://t.me/+hqOtVtNY41tkYjMy"),
+                InlineKeyboardButton("Тернопіль", url="https://t.me/+k2UwXPJrBg9mZjky"),
+                InlineKeyboardButton("Ужгород", url="https://t.me/+ZGu30lrloOM1ZWMy")
+            ],
+            [
+                InlineKeyboardButton("Луцьк", url="https://t.me/+wSOX_aMM9oJkZTdi"),
+                InlineKeyboardButton("Чернівці", url="https://t.me/+zU3actkWQlwwZjI6"),
+                InlineKeyboardButton("Миколаїв", url="https://t.me/+vyd6xO6jZ9o2NWI6")
+            ],
+            [
+                InlineKeyboardButton("Херсон", url="https://t.me/+pNd7r-LabUY5Yzky"),
+                InlineKeyboardButton("Кропивницький", url="https://t.me/+CAClUadjBbxhZDI6")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "Ось інші регіони для вибору:",
+            reply_markup=reply_markup
         )
 
-        bot_response = response.choices[0].message.content
-        chat_history[user_id].append({"role": "assistant", "content": bot_response})
-
-        if len(chat_history[user_id]) > 10:
-            chat_history[user_id] = chat_history[user_id][-10:]
-
-        if len(chat_history[user_id]) % 5 == 0:
-            bot_response += "\nДо речі, я ШІ, але стараюся бути максимально корисним! 😊"
-
-        bot.reply_to(message, bot_response)
-        logging.info(f"Надіслано відповідь для user_id={user_id}: {bot_response[:50]}...")
-
-    except Exception as e:
-        bot.reply_to(message, f"Виникла помилка: {str(e)}. Спробуй ще раз!")
-        logging.error(f"Помилка OpenAI для user_id={user_id}: {e}")
-
-# Обробник для перевірки статусу сервера
-@app.route("/")
-def index():
+# Обробник команди /stats
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    admin_id = 293102975
+    if user_id != admin_id:
+        await update.message.reply_text("Ця команда доступна лише адміністратору!")
+        return
     try:
-        bot.remove_webhook()
-        bot.set_webhook(url=f"{APP_URL}/{BOT_TOKEN}")
-        logging.info(f"Webhook встановлено: {APP_URL}/{BOT_TOKEN}")
-        return "Webhook set", 200
+        conn = psycopg2.connect(
+            dbname=os.getenv("PGDATABASE"),
+            user=os.getenv("PGUSER"),
+            password=os.getenv("PGPASSWORD"),
+            host=os.getenv("PGHOST"),
+            port=os.getenv("PGPORT")
+        )
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users")
+        total_users = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM users WHERE is_subscribed = TRUE AND is_blocked = FALSE")
+        subscribed_users = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM users WHERE is_blocked = TRUE")
+        blocked_users = cur.fetchone()[0]
+        await update.message.reply_text(
+            f"Статистика користувачів:\n"
+            f"Загальна кількість: {total_users}\n"
+            f"Підписані на канал: {subscribed_users}\n"
+            f"Заблоковані: {blocked_users}"
+        )
     except Exception as e:
-        logging.error(f"Помилка налаштування Webhook: {e}")
-        return "Webhook setup failed", 500
-
-# Обробник для перевірки контактів
-@bot.message_handler(commands=['get_contacts'])
-def get_contacts(message):
-    ADMIN_ID = ТВІЙ_ADMIN_ID  # Заміни на свій Telegram user_id
-    if message.from_user.id == ADMIN_ID:
-        try:
-            conn = psycopg2.connect(DATABASE_URL)
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users")
-            contacts = cursor.fetchall()
+        logger.error(f"Помилка при отриманні статистики: {e}")
+        await update.message.reply_text(f"Помилка: {e}")
+    finally:
+        if conn:
             conn.close()
-            if contacts:
-                response = "Збережені контакти:\n" + "\n".join([f"ID: {c[0]}, Username: {c[1]}, Phone: {c[2]}" for c in contacts])
-            else:
-                response = "Контактів поки немає."
-            bot.reply_to(message, response)
-            logging.info(f"Надіслано список контактів для admin_id={message.from_user.id}")
-        except Exception as e:
-            bot.reply_to(message, f"Помилка при отриманні контактів: {str(e)}")
-            logging.error(f"Помилка при отриманні контактів: {e}")
-    else:
-        bot.reply_to(message, "Ця команда тільки для адміна!")
-        logging.info(f"Невірна спроба доступу до /get_contacts від user_id={message.from_user.id}")
 
-# Запуск сервера (для локального тестування, Railway використовує gunicorn)
-if __name__ == '__main__':
-    logging.info("Запуск сервера для локального тестування...")
-    bot.remove_webhook()
-    bot.set_webhook(url=f"{APP_URL}/{BOT_TOKEN}")
-    app.run(host="0.0.0.0", port=int(PORT))
+# Обробник сигналів для коректного завершення
+def signal_handler(sig, frame):
+    logger.info("Отримано сигнал завершення, вимикаю бота...")
+    os._exit(0)
+
+# Ініціалізація та запуск бота
+if __name__ == "__main__":
+    # Налаштування обробки сигналів
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    # Ініціалізація бази даних
+    init_db()
+
+    # Створення додатку
+    application = Application.builder().token(TOKEN).build()
+
+    # Додавання обробників команд
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("broadcast", broadcast))
+    application.add_handler(CommandHandler("stats", stats))
+    application.add_handler(CallbackQueryHandler(button_callback))
+
+    # Запуск бота
+    logger.info("Бот запущено")
+    application.run_polling()

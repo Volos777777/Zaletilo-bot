@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 
 # Змінні середовища
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = "-1002823366291"
+CHANNEL_ID = "-1002823366291"  # Залишаємо як ID для get_chat_member
+CHANNEL_LINK = "https://t.me/zaletilo_channel"  # Замініть на реальне посилання
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Обробник команди /start
@@ -30,11 +31,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Підписався (лась)", callback_data="subscribe")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-await update.message.reply_text(
-    f"Привіт, {user.first_name}! Ласкаво просимо до бота @zaletilo_bot!\n"
-    f"Приєднуйтесь до нашого каналу: https://t.me/your_channel",
-    reply_markup=reply_markup
-)
+    await update.message.reply_text(
+        f"Привіт, {user.first_name}! Ласкаво просимо до бота @zaletilo_bot!\n"
+        f"Приєднуйтесь до нашого каналу: {CHANNEL_LINK}",
+        reply_markup=reply_markup
+    )
 
 # Обробник колбека для кнопки підписки та регіонів
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -67,8 +68,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("Ви не підписані на канал. Будь ласка, підпишіться, щоб продовжити!")
     except Exception as e:
         await query.edit_message_text("Помилка перевірки підписки. Спробуйте ще раз або зверніться до адміністратора.")
-    elif query.data == "other_regions":
-        # Клавіатура з рештою регіонів
+    # Обробка інших регіонів поза try-except
+    if query.data == "other_regions":
         keyboard = [
             [
                 InlineKeyboardButton("Запоріжжя", url="https://t.me/+XE-XiYnCSOwwYzAy"),
@@ -105,6 +106,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Ось інші регіони для вибору:",
             reply_markup=reply_markup
         )
+
 # Обробник команди /stats
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id

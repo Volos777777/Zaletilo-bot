@@ -30,11 +30,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Підписався (лась)", callback_data="subscribe")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        f"Привіт, {user.first_name}! Ласкаво просимо до бота @zaletilo_bot!\n"
-        f"Приєднуйтесь до нашого каналу: {CHANNEL_ID}",
-        reply_markup=reply_markup
-    )
+await update.message.reply_text(
+    f"Привіт, {user.first_name}! Ласкаво просимо до бота @zaletilo_bot!\n"
+    f"Приєднуйтесь до нашого каналу: https://t.me/your_channel",
+    reply_markup=reply_markup
+)
 
 # Обробник колбека для кнопки підписки та регіонів
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

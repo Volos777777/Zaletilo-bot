@@ -41,27 +41,32 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
-
-    if query.data == "subscribe":
-        update_subscription_status(user_id, True)
-        # Створюємо клавіатуру з регіонами
-        keyboard = [
-            [
-                InlineKeyboardButton("Київ", url="https://t.me/+MAtbwy9ufGAwMzli"),
-                InlineKeyboardButton("Дніпро", url="https://t.me/+YvX-FzQHpU1kNGZi"),
-                InlineKeyboardButton("Харків", url="https://t.me/+kanHOVAz99FlODYy"),
-                InlineKeyboardButton("Одеса", url="https://t.me/+FyKju8C82b43OGEy"),
-                InlineKeyboardButton("Львів", url="https://t.me/+rbesn-FqWKkxMDFi")
-            ],
-            [
-                InlineKeyboardButton("Інші регіони", callback_data="other_regions")
+    chat_id = "-1002823366291"  # ID каналу
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        if member.status in ['member', 'administrator', 'creator']:
+            update_subscription_status(user_id, True)
+            keyboard = [
+                [
+                    InlineKeyboardButton("Київ", url="https://t.me/+MAtbwy9ufGAwMzli"),
+                    InlineKeyboardButton("Дніпро", url="https://t.me/+YvX-FzQHpU1kNGZi"),
+                    InlineKeyboardButton("Харків", url="https://t.me/+kanHOVAz99FlODYy"),
+                    InlineKeyboardButton("Одеса", url="https://t.me/+FyKju8C82b43OGEy"),
+                    InlineKeyboardButton("Львів", url="https://t.me/+rbesn-FqWKkxMDFi")
+                ],
+                [
+                    InlineKeyboardButton("Інші регіони", callback_data="other_regions")
+                ]
             ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            "Дякуємо за підписку! Тепер ви можете знаходити замовлення та створювати оголошення у вашому регіоні. Оберіть свій регіон:",
-            reply_markup=reply_markup
-        )
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(
+                "Дякуємо за підписку! Тепер ви можете знаходити замовлення та створювати оголошення у вашому регіоні. Оберіть свій регіон:",
+                reply_markup=reply_markup
+            )
+        else:
+            await query.edit_message_text("Ви не підписані на канал. Будь ласка, підпишіться, щоб продовжити!")
+    except Exception as e:
+        await query.edit_message_text("Помилка перевірки підписки. Спробуйте ще раз або зверніться до адміністратора.")
     elif query.data == "other_regions":
         # Клавіатура з рештою регіонів
         keyboard = [
@@ -100,7 +105,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Ось інші регіони для вибору:",
             reply_markup=reply_markup
         )
-
 # Обробник команди /stats
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id

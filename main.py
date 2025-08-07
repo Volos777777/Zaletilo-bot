@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 
 # Змінні середовища
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = "-1002823366291"  # Залишаємо як ID для get_chat_member
-CHANNEL_LINK = "https://t.me/zaletilo_channel"  # Замініть на реальне посилання
+CHANNEL_ID = "-1002823366291"  # ID каналу для get_chat_member
+CHANNEL_LINK = "https://t.me/zaletilo_channel"  # Замініть на реальне посилання до каналу
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Обробник команди /start
@@ -68,7 +68,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("Ви не підписані на канал. Будь ласка, підпишіться, щоб продовжити!")
     except Exception as e:
         await query.edit_message_text("Помилка перевірки підписки. Спробуйте ще раз або зверніться до адміністратора.")
-    # Обробка інших регіонів поза try-except
     if query.data == "other_regions":
         keyboard = [
             [
@@ -165,6 +164,6 @@ if __name__ == "__main__":
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CallbackQueryHandler(button_callback))
 
-    # Запуск бота
+    # Запуск бота з allowed_updates для уникнення конфліктів
     logger.info("Бот запущено")
-    application.run_polling()
+    application.run_polling(allowed_updates=None)
